@@ -16,7 +16,7 @@ services:
     deploy:
       placement:
         constraints:
-          - node.labels.name == manager
+          - node.labels.name == orderer
     image: hyperledger/fabric-ca:latest
     environment:
       - FABRIC_CA_HOME=/etc/hyperledger/fabric-ca-server
