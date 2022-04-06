@@ -17,3 +17,12 @@ source ./organizations/fabric-ca/registerEnroll.sh
 createOrg2
 
 # run file add-org2-to-existingnetwork.md (modify every path in this file)
+run step by step in this file
+
+# copy file org2_update_in_envelope to container cli each node
+docker cp /root/Sample_IOT_BC/org2/org2_update_in_envelope.pb <container id>:/opt/gopath/src/github.com/hyperledger/fabric/peer
+
+# run script inside container cli
+peer channel signconfigtx -f org2_update_in_envelope.pb
+
+# cmd show "Endorser and orderer connections initialized" that it is success signconfigtx
