@@ -51,16 +51,7 @@ class IOTContract extends Contract {
     );
     return queryResults; //shim.success(queryResults);
   }
-  async sendinfofromsensortochain(
-    ctx,
-    sensorid,
-    temp,
-    humd,
-    tds,
-    ph,
-    eco2,
-    tvoc
-  ) {
+  async sendinfofromsensortochain(ctx, sensorid, temp, humd, tds, ph, eco2, tvoc) {
     const deviceAsBytes = await ctx.stub.getState(sensorid);
     if (!deviceAsBytes || deviceAsBytes.length === 0) {
       throw new Error(`${deviceAsBytes} does not exist`);
@@ -72,41 +63,18 @@ class IOTContract extends Contract {
     let _keyDateAsString = _keyHelper.getDate().toString();
     const dataDevice = {
       docType: "DataDevice",
-      mspid,
-      txId: this.TxId,
-      datecreated: _keyHelper,
-      sensorid,
-      temp,
-      humd,
-      tds,
-      ph,
-      eco2,
-      tvoc,
+      mspid, txId: this.TxId,datecreated: _keyHelper, sensoridtemp,humd,tds,ph, eco2,tvoc,
     };
     try {
       let indexName = "sensorid-year-month-date-txid";
       let indexKey = await ctx.stub.createCompositeKey(indexName, [
-        sensorid,
-        _keyYearAsString,
-        _keyMonthAsString,
-        _keyDateAsString,
-        this.TxId,
-      ]);
+        sensorid,_keyYearAsString,_keyMonthAsString,_keyDateAsString,this.TxId]);
       await ctx.stub.putState(
         indexKey,
         Buffer.from(JSON.stringify(dataDevice))
       );
       return {
-        key:
-          sensorid +
-          "-" +
-          _keyYearAsString +
-          "-" +
-          _keyMonthAsString +
-          "-" +
-          _keyDateAsString +
-          "-" +
-          this.TxId,
+        key:sensorid +"-" +_keyYearAsString +"-" +_keyMonthAsString +"-" +_keyDateAsString + "-" +this.TxId,
       };
     } catch (e) {
       throw new Error(`The tx ${this.TxId} can not be stored: ${e}`);
