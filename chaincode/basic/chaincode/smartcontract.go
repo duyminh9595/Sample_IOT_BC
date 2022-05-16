@@ -1,185 +1,396 @@
-package chaincode
+"use strict";
 
-import (
-	"encoding/json"
-	"fmt"
+// SDK Library to asset with writing the logic
+const { Contract } = require("fabric-contract-api");
 
-	"github.com/hyperledger/fabric-contract-api-go/contractapi"
-)
+class IOTContract extends Contract {
+  constructor() {
+    super("IOTContract");
+    this.TxId = "";
+  }
 
-// SmartContract provides functions for managing an Asset
-type SmartContract struct {
-	contractapi.Contract
+  async beforeTransaction(ctx) {
+    // default implementation is do nothing
+    this.TxId = ctx.stub.getTxID();
+    console.log(`we can do some logging for ${this.TxId}  and many more !!`);
+  }
+
+  // register sensor for each farm
+  async registrationsensor(ctx, namesensor, type, info) {
+    const mspid = await ctx.clientIdentity.getMSPID();
+    const sensor = {
+      namesensor,
+      type,
+      info,
+      docType: "Sensor",
+      mspid,
+    };
+    await ctx.stub.putState(this.TxId, Buffer.from(JSON.stringify(sensor)));
+    console.info("============= END : Create Sensor Success ===========");
+  }
+  //all sensor in chain
+  async allsensorinchain(ctx) {
+    let queryString = {};
+    queryString.selector = {};
+    queryString.selector.docType = "Sensor";
+    let queryResults = await this.getQueryResultForQueryString(
+      ctx.stub,
+      JSON.stringify(queryString)
+    );
+    return queryResults; //shim.success(queryResults);
+  }
+  async allsensorbelongtofarm(ctx) {
+    const mspid = await ctx.clientIdentity.getMSPID();
+    let queryString = {};
+    queryString.selector = {};
+    queryString.selector.docType = "Sensor";
+    queryString.selector.mspid = mspid;
+    let queryResults = await this.getQueryResultForQueryString(
+      ctx.stub,
+      JSON.stringify(queryString)
+    );
+    return queryResults; //shim.success(queryResults);
+  }
+  async sendinfofromsensortochain(
+    ctx,
+    sensorid,
+    temp,
+    humd,
+    tds,
+    ph,
+    eco2,
+    tvoc
+  ) {
+    const deviceAsBytes = await ctx.stub.getState(sensorid);
+    if (!deviceAsBytes || deviceAsBytes.length === 0) {
+      throw new Error(`${deviceAsBytes} does not exist`);
+    }
+    const mspid = await ctx.clientIdentity.getMSPID();
+    let _keyHelper = new Date();
+    let _keyYearAsString = _keyHelper.getFullYear().toString();
+    let _keyMonthAsString = _keyHelper.getMonth().toString();
+    let _keyDateAsString = _keyHelper.getDate().toString();
+    const dataDevice = {
+      docType: "DataDevice",
+      mspid,
+      txId: this.TxId,
+      datecreated: _keyHelper,
+      sensorid,
+      temp,
+      humd,
+      tds,
+      ph,
+      eco2,
+      tvoc,
+    };
+    try {
+      let indexName = "sensorid-year-month-date-txid";
+      let indexKey = await ctx.stub.createCompositeKey(indexName, [
+        sensorid,
+        _keyYearAsString,
+        _keyMonthAsString,
+        _keyDateAsString,
+        this.TxId,
+      ]);
+      await ctx.stub.putState(
+        indexKey,
+        Buffer.from(JSON.stringify(dataDevice))
+      );
+      return {
+        key:
+          sensorid +
+          "-" +
+          _keyYearAsString +
+          "-" +
+          _keyMonthAsString +
+          "-" +
+          _keyDateAsString +
+          "-" +
+          this.TxId,
+      };
+    } catch (e) {
+      throw new Error(`The tx ${this.TxId} can not be stored: ${e}`);
+    }
+  }
+
+  async getdata(ctx) {
+    const args = ctx.stub.getArgs();
+    const keyValues = args[1].split("-");
+    let keys = [];
+    keyValues.forEach((element) => keys.push(element));
+    let resultsIterator = await ctx.stub.getStateByPartialCompositeKey(
+      "sensorid-year-month-date-txid",
+      keys
+    );
+    const allResults = [];
+    while (true) {
+      const res = await resultsIterator.next();
+
+      if (res.value) {
+        allResults.push(res.value.value.toString("utf8"));
+      }
+      if (res.done) {
+        await resultsIterator.close();
+        return allResults;
+      }
+    }
+  }
+  async getdataByTimeRange(ctx) {
+    // we use the args option
+    const args = ctx.stub.getArgs();
+
+    // break condition
+    if (args.length !== 3) {
+      return JSON.stringify({ error: true });
+    }
+
+    // we collect our result
+    let allResults = [];
+
+    // compose the selector
+    let queryString = {};
+    queryString.selector = {};
+    queryString.selector.datecreated = {
+      $gt: args[1],
+      $lt: args[2],
+    };
+    queryString.sort = [{ datecreated: "asc" }];
+
+    //console.log(queryString)
+    // --------------------
+
+    // do the query
+    let resultsIterator = await ctx.stub.getQueryResult(
+      JSON.stringify(queryString)
+    );
+
+    // loop over the results and create the allResults array
+    let result = await resultsIterator.next();
+    while (!result.done) {
+      const strValue = Buffer.from(result.value.value.toString()).toString(
+        "utf8"
+      );
+      let record;
+      try {
+        record = JSON.parse(strValue);
+      } catch (err) {
+        console.log(err);
+        record = strValue;
+      }
+      allResults.push({ Key: result.value.key, Record: record });
+      result = await resultsIterator.next();
+    }
+
+    // return the finale result
+    return JSON.stringify(allResults);
+  }
+  async getalldatasensorbelongtofarm(ctx, sensorid) {
+    const mspid = await ctx.clientIdentity.getMSPID();
+    let queryString = {};
+    queryString.selector = {};
+    queryString.selector.docType = "DataDevice";
+    queryString.selector.mspid = mspid;
+    queryString.selector.sensorid = sensorid;
+    let queryResults = await this.getQueryResultForQueryString(
+      ctx.stub,
+      JSON.stringify(queryString)
+    );
+    return queryResults; //shim.success(queryResults);
+  }
+
+  async storeCs(ctx, revenue, datecreated, cstype) {
+    // calc our values
+    let _commission = 0;
+    let _revenue = parseFloat(revenue);
+    let _datecreated = datecreated;
+
+    if (cstype === "reco") {
+      // 1 %
+      _commission = (_revenue / 100) * 1;
+    } else if (cstype === "reve") {
+      // 10 %
+      _commission = (_revenue / 100) * 10;
+    }
+
+    // compose our model
+    let model = {
+      revenue: _revenue,
+      commission: _commission,
+      datecreated: _datecreated,
+      cstype: cstype,
+      txId: this.TxId,
+    };
+
+    try {
+      // store the composite key with a the value
+      let indexName = "year~month~txid";
+
+      let _keyHelper = new Date(datecreated);
+      let _keyYearAsString = _keyHelper.getFullYear().toString();
+      let _keyMonthAsString = _keyHelper.getMonth().toString();
+
+      let yearMonthIndexKey = await ctx.stub.createCompositeKey(indexName, [
+        _keyYearAsString,
+        _keyMonthAsString,
+        this.TxId,
+      ]);
+
+      //console.info(yearMonthIndexKey, _keyYearAsString, _keyMonthAsString, this.TxId);
+
+      // store the new state
+      await ctx.stub.putState(
+        yearMonthIndexKey,
+        Buffer.from(JSON.stringify(model))
+      );
+
+      // compose the return values
+      return {
+        key: _keyYearAsString + "~" + _keyMonthAsString + "~" + this.TxId,
+      };
+    } catch (e) {
+      throw new Error(`The tx ${this.TxId} can not be stored: ${e}`);
+    }
+  }
+
+  async getdatasensorbelongtofarmonmonthyear(
+    ctx,
+    sensorid,
+    _keyYearAsString,
+    _keyMonthAsString
+  ) {
+    const mspid = await ctx.clientIdentity.getMSPID();
+    let queryString = {};
+    queryString.selector = {};
+    queryString.selector.docType = "DataDevice";
+    queryString.selector.mspid = mspid;
+    queryString.selector.sensorid = sensorid;
+    queryString.selector._keyYearAsString = _keyYearAsString;
+    queryString.selector._keyMonthAsString = _keyMonthAsString;
+    let queryResults = await this.getQueryResultForQueryString(
+      ctx.stub,
+      JSON.stringify(queryString)
+    );
+    return queryResults; //shim.success(queryResults);
+  }
+
+  async getdatasensorbelongtofarmondatemonthyear(
+    ctx,
+    sensorid,
+    _keyYearAsString,
+    _keyMonthAsString,
+    _keyDateAsString
+  ) {
+    const mspid = await ctx.clientIdentity.getMSPID();
+    let queryString = {};
+    queryString.selector = {};
+    queryString.selector.docType = "DataDevice";
+    queryString.selector.mspid = mspid;
+    queryString.selector.sensorid = sensorid;
+    queryString.selector._keyYearAsString = _keyYearAsString;
+    queryString.selector._keyMonthAsString = _keyMonthAsString;
+    queryString.selector._keyDateAsString = _keyDateAsString;
+    let queryResults = await this.getQueryResultForQueryString(
+      ctx.stub,
+      JSON.stringify(queryString)
+    );
+    return queryResults; //shim.success(queryResults);
+  }
+  async getCsByTimeRange(ctx) {
+    // we use the args option
+    const args = ctx.stub.getArgs();
+
+    // break condition
+    if (args.length !== 3) {
+      return JSON.stringify({ error: true });
+    }
+
+    // we collect our result
+    let allResults = [];
+
+    // compose the selector
+    let queryString = {};
+    queryString.selector = {};
+    queryString.selector.revenueTs = {
+      $gt: args[1],
+      $lt: args[2],
+    };
+    queryString.sort = [{ revenueTs: "asc" }];
+
+    //console.log(queryString)
+    // --------------------
+
+    // do the query
+    let resultsIterator = await ctx.stub.getQueryResult(
+      JSON.stringify(queryString)
+    );
+
+    // loop over the results and create the allResults array
+    let result = await resultsIterator.next();
+    while (!result.done) {
+      const strValue = Buffer.from(result.value.value.toString()).toString(
+        "utf8"
+      );
+      let record;
+      try {
+        record = JSON.parse(strValue);
+      } catch (err) {
+        console.log(err);
+        record = strValue;
+      }
+      allResults.push({ Key: result.value.key, Record: record });
+      result = await resultsIterator.next();
+    }
+
+    // return the finale result
+    return JSON.stringify(allResults);
+  }
+  async getQueryResultForQueryString(stub, queryString) {
+    console.info("- getQueryResultForQueryString queryString:\n" + queryString);
+    let resultsIterator = await stub.getQueryResult(queryString);
+
+    let results = await this.getAllResults(resultsIterator, false);
+
+    //return Buffer.from(JSON.stringify(results));
+    return results;
+  }
+  async getAllResults(iterator, isHistory) {
+    let allResults = [];
+    while (true) {
+      let res = await iterator.next();
+
+      if (res.value && res.value.value.toString()) {
+        let jsonRes = {};
+        console.log(res.value.value.toString("utf8"));
+
+        if (isHistory && isHistory === true) {
+          jsonRes.TxId = res.value.tx_id;
+          jsonRes.Timestamp = res.value.timestamp;
+          jsonRes.IsDelete = res.value.is_delete.toString();
+          try {
+            jsonRes.Value = JSON.parse(res.value.value.toString("utf8"));
+          } catch (err) {
+            console.log(err);
+            jsonRes.Value = res.value.value.toString("utf8");
+          }
+        } else {
+          jsonRes.Key = res.value.key;
+          try {
+            jsonRes.Record = JSON.parse(res.value.value.toString("utf8"));
+          } catch (err) {
+            console.log(err);
+            jsonRes.Record = res.value.value.toString("utf8");
+          }
+        }
+        allResults.push(jsonRes);
+      }
+      if (res.done) {
+        console.log("end of data");
+        await iterator.close();
+        console.info(allResults);
+        return allResults;
+      }
+    }
+  }
 }
 
-// Asset describes basic details of what makes up a simple asset
-type Asset struct {
-	ID             string `json:"ID"`
-	Color          string `json:"color"`
-	Size           int    `json:"size"`
-	Owner          string `json:"owner"`
-	AppraisedValue int    `json:"appraisedValue"`
-}
-
-// InitLedger adds a base set of assets to the ledger
-func (s *SmartContract) InitLedger(ctx contractapi.TransactionContextInterface) error {
-	assets := []Asset{
-		{ID: "asset1", Color: "blue", Size: 5, Owner: "Tomoko", AppraisedValue: 300},
-		{ID: "asset2", Color: "red", Size: 5, Owner: "Brad", AppraisedValue: 400},
-		{ID: "asset3", Color: "green", Size: 10, Owner: "Jin Soo", AppraisedValue: 500},
-		{ID: "asset4", Color: "yellow", Size: 10, Owner: "Max", AppraisedValue: 600},
-		{ID: "asset5", Color: "black", Size: 15, Owner: "Adriana", AppraisedValue: 700},
-		{ID: "asset6", Color: "white", Size: 15, Owner: "Michel", AppraisedValue: 800},
-	}
-
-	for _, asset := range assets {
-		assetJSON, err := json.Marshal(asset)
-		if err != nil {
-			return err
-		}
-
-		err = ctx.GetStub().PutState(asset.ID, assetJSON)
-		if err != nil {
-			return fmt.Errorf("failed to put to world state. %v", err)
-		}
-	}
-
-	return nil
-}
-
-// CreateAsset issues a new asset to the world state with given details.
-func (s *SmartContract) CreateAsset(ctx contractapi.TransactionContextInterface, id string, color string, size int, owner string, appraisedValue int) error {
-	exists, err := s.AssetExists(ctx, id)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return fmt.Errorf("the asset %s already exists", id)
-	}
-
-	asset := Asset{
-		ID:             id,
-		Color:          color,
-		Size:           size,
-		Owner:          owner,
-		AppraisedValue: appraisedValue,
-	}
-	assetJSON, err := json.Marshal(asset)
-	if err != nil {
-		return err
-	}
-
-	return ctx.GetStub().PutState(id, assetJSON)
-}
-
-// ReadAsset returns the asset stored in the world state with given id.
-func (s *SmartContract) ReadAsset(ctx contractapi.TransactionContextInterface, id string) (*Asset, error) {
-	assetJSON, err := ctx.GetStub().GetState(id)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read from world state: %v", err)
-	}
-	if assetJSON == nil {
-		return nil, fmt.Errorf("the asset %s does not exist", id)
-	}
-
-	var asset Asset
-	err = json.Unmarshal(assetJSON, &asset)
-	if err != nil {
-		return nil, err
-	}
-
-	return &asset, nil
-}
-
-// UpdateAsset updates an existing asset in the world state with provided parameters.
-func (s *SmartContract) UpdateAsset(ctx contractapi.TransactionContextInterface, id string, color string, size int, owner string, appraisedValue int) error {
-	exists, err := s.AssetExists(ctx, id)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return fmt.Errorf("the asset %s does not exist", id)
-	}
-
-	// overwriting original asset with new asset
-	asset := Asset{
-		ID:             id,
-		Color:          color,
-		Size:           size,
-		Owner:          owner,
-		AppraisedValue: appraisedValue,
-	}
-	assetJSON, err := json.Marshal(asset)
-	if err != nil {
-		return err
-	}
-
-	return ctx.GetStub().PutState(id, assetJSON)
-}
-
-// DeleteAsset deletes an given asset from the world state.
-func (s *SmartContract) DeleteAsset(ctx contractapi.TransactionContextInterface, id string) error {
-	exists, err := s.AssetExists(ctx, id)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return fmt.Errorf("the asset %s does not exist", id)
-	}
-
-	return ctx.GetStub().DelState(id)
-}
-
-// AssetExists returns true when asset with given ID exists in world state
-func (s *SmartContract) AssetExists(ctx contractapi.TransactionContextInterface, id string) (bool, error) {
-	assetJSON, err := ctx.GetStub().GetState(id)
-	if err != nil {
-		return false, fmt.Errorf("failed to read from world state: %v", err)
-	}
-
-	return assetJSON != nil, nil
-}
-
-// TransferAsset updates the owner field of asset with given id in world state.
-func (s *SmartContract) TransferAsset(ctx contractapi.TransactionContextInterface, id string, newOwner string) error {
-	asset, err := s.ReadAsset(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	asset.Owner = newOwner
-	assetJSON, err := json.Marshal(asset)
-	if err != nil {
-		return err
-	}
-
-	return ctx.GetStub().PutState(id, assetJSON)
-}
-
-// GetAllAssets returns all assets found in world state
-func (s *SmartContract) GetAllAssets(ctx contractapi.TransactionContextInterface) ([]*Asset, error) {
-	// range query with empty string for startKey and endKey does an
-	// open-ended query of all assets in the chaincode namespace.
-	resultsIterator, err := ctx.GetStub().GetStateByRange("", "")
-	if err != nil {
-		return nil, err
-	}
-	defer resultsIterator.Close()
-
-	var assets []*Asset
-	for resultsIterator.HasNext() {
-		queryResponse, err := resultsIterator.Next()
-		if err != nil {
-			return nil, err
-		}
-
-		var asset Asset
-		err = json.Unmarshal(queryResponse.Value, &asset)
-		if err != nil {
-			return nil, err
-		}
-		assets = append(assets, &asset)
-	}
-
-	return assets, nil
-}
+module.exports = IOTContract;
